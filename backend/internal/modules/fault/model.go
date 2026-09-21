@@ -31,6 +31,13 @@ func Statuses() []string {
 	return []string{StatusPending, StatusProcessing, StatusRepaired, StatusClosed}
 }
 
+// OpenStatuses 返回未闭环(尚未关闭)的故障状态取值, 即待处理 / 维修中 / 已修复。
+// 已修复只是维修完工, 故障闭环以"已关闭"为准, 因此已修复仍属于未闭环。
+// 路灯运行状态、看板统计、列表筛选等所有涉及"未闭环"的口径统一以该集合为准。
+func OpenStatuses() []string {
+	return []string{StatusPending, StatusProcessing, StatusRepaired}
+}
+
 // Levels 返回全部故障等级取值。
 func Levels() []string {
 	return []string{LevelLow, LevelNormal, LevelHigh, LevelUrgent}
@@ -61,7 +68,12 @@ func IsValidStatus(status string) bool {
 
 // IsOpen 判断故障是否仍处于未闭环状态。
 func IsOpen(status string) bool {
-	return status == StatusPending || status == StatusProcessing
+	for _, item := range OpenStatuses() {
+		if item == status {
+			return true
+		}
+	}
+	return false
 }
 
 // canTransitTo 校验状态流转是否合法。

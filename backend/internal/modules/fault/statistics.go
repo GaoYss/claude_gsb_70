@@ -15,11 +15,11 @@ func (r *Repository) Count(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
-// CountOpen 统计未闭环(待处理 + 维修中)的故障数量。
+// CountOpen 统计未闭环(待处理 + 维修中 + 已修复)的故障数量。
 func (r *Repository) CountOpen(ctx context.Context) (int64, error) {
 	var total int64
 	err := r.session(ctx).Model(&Fault{}).
-		Where("status IN ?", []string{StatusPending, StatusProcessing}).
+		Where("status IN ?", OpenStatuses()).
 		Count(&total).Error
 	if err != nil {
 		return 0, fmt.Errorf("统计未闭环故障失败: %w", err)

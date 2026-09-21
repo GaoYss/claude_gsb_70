@@ -156,7 +156,8 @@ async function searchFaults(keyword = '') {
   faultLoading.value = true
   try {
     const data = await faultApi.list({ keyword, only_open: true, page: 1, page_size: 20 }, { silent: true })
-    faultCandidates.value = data?.items ?? []
+    // 未闭环包含已修复待闭环的故障, 但维修登记只接受待处理 / 维修中的故障, 候选中剔除已修复
+    faultCandidates.value = (data?.items ?? []).filter((item) => item.status !== 'repaired')
   } catch (error) {
     faultCandidates.value = []
   } finally {

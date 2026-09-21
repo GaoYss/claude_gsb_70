@@ -179,7 +179,7 @@ func (r *Repository) ListByLamp(ctx context.Context, lampID uint) ([]Fault, erro
 func (r *Repository) GetOpenByLamp(ctx context.Context, lampID uint) (*Fault, error) {
 	var entity Fault
 	err := r.session(ctx).
-		Where("lamp_id = ? AND status IN ?", lampID, []string{StatusPending, StatusProcessing}).
+		Where("lamp_id = ? AND status IN ?", lampID, OpenStatuses()).
 		Order("reported_at DESC, id DESC").
 		First(&entity).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -195,10 +195,23 @@ func (r *Repository) GetOpenByLamp(ctx context.Context, lampID uint) (*Fault, er
 func (r *Repository) CountOpenByLamp(ctx context.Context, lampID uint) (int64, error) {
 	var count int64
 	err := r.session(ctx).Model(&Fault{}).
-		Where("lamp_id = ? AND status IN ?", lampID, []string{StatusPending, StatusProcessing}).
+		Where("lamp_id = ? AND status IN ?", lampID, OpenStatuses()).
 		Count(&count).Error
 	if err != nil {
 		return 0, fmt.Errorf("统计路灯未闭环故障失败: %w", err)
+	}
+	return count, nil
+}
+
+// CountActiveByLamp 统计某盏路灯仍在处置中(待处理 + 维修中)的故障数量。
+// 与未闭环口径不同, 已修复待闭环的故障不阻碍新故障登记, 因此登记守卫使用该口径。
+func (r *Repository) CountActiveByLamp(ctx context.Context, lampID uint) (int64, error) {
+	var count int64
+	err := r.session(ctx).Model(&Fault{}).
+		Where("lamp_id = ? AND status IN ?", lampID, []string{StatusPending, StatusProcessing}).
+		Count(&count).Error
+	if err != nil {
+		return 0, fmt.Errorf("统计路灯处置中故障失败: %w", err)
 	}
 	return count, nil
 }
@@ -260,7 +273,7 @@ func applyFilter(statement *gorm.DB, filter Filter) *gorm.DB {
 		statement = statement.Where("reported_at < ?", *filter.ReportedTo)
 	}
 	if filter.OnlyOpen {
-		statement = statement.Where("status IN ?", []string{StatusPending, StatusProcessing})
+		statement = statement.Where("status IN ?", OpenStatuses())
 	}
 	return statement
 }

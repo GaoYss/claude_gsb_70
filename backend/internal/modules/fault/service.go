@@ -74,19 +74,20 @@ func (s *Service) ListByLamp(ctx context.Context, lampID uint) ([]Fault, error) 
 	return s.repo.ListByLamp(ctx, lampID)
 }
 
-// Create 登记故障: 校验路灯存在、无未闭环故障后落库, 并同步路灯运行状态。
+// Create 登记故障: 校验路灯存在、无处置中故障后落库, 并同步路灯运行状态。
+// 已修复待闭环的故障不阻碍新故障登记, 因此一盏路灯可能同时挂多条未闭环故障。
 func (s *Service) Create(ctx context.Context, req CreateRequest) (*Fault, error) {
 	device, err := s.lamps.Get(ctx, req.LampID)
 	if err != nil {
 		return nil, err
 	}
 
-	openCount, err := s.repo.CountOpenByLamp(ctx, device.ID)
+	activeCount, err := s.repo.CountActiveByLamp(ctx, device.ID)
 	if err != nil {
 		return nil, err
 	}
-	if openCount > 0 {
-		return nil, apperr.Conflict("路灯 %s 已存在 %d 条未闭环故障, 请先处理后再登记", device.Code, openCount)
+	if activeCount > 0 {
+		return nil, apperr.Conflict("路灯 %s 已存在 %d 条待处理或维修中的故障, 请先处理后再登记", device.Code, activeCount)
 	}
 
 	faultType := strings.TrimSpace(req.FaultType)
@@ -304,7 +305,9 @@ func (s *Service) SyncRepairStats(ctx context.Context, faultID uint, repairCount
 	return s.syncLampStatus(ctx, entity.LampID)
 }
 
-// syncLampStatus 依据该路灯的故障分布重新计算并写回运行状态。
+// syncLampStatus 依据该路灯名下全部未闭环故障重新计算并写回运行状态。
+// 只要存在未闭环故障(含已修复待闭环)就不回落正常: 维修中优先, 其次故障,
+// 仅当所有故障全部闭环(或没有故障)时才恢复为正常。
 func (s *Service) syncLampStatus(ctx context.Context, lampID uint) error {
 	counts, err := s.repo.StatusCountsForLamp(ctx, lampID)
 	if err != nil {
@@ -315,7 +318,7 @@ func (s *Service) syncLampStatus(ctx context.Context, lampID uint) error {
 	switch {
 	case counts[StatusProcessing] > 0:
 		status = lamp.RunStatusMaintenance
-	case counts[StatusPending] > 0:
+	case counts[StatusPending] > 0 || counts[StatusRepaired] > 0:
 		status = lamp.RunStatusFault
 	}
 	return s.lamps.UpdateRunStatus(ctx, lampID, status)

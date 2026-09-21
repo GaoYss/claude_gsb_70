@@ -201,7 +201,7 @@ func (s *Service) Lamps(ctx context.Context, query LampQuery) ([]LampStatusRow, 
 		if query.OnlyOpen {
 			statement = statement.Where(
 				"EXISTS (SELECT 1 FROM fault WHERE fault.lamp_id = lamp.id AND fault.status IN ?)",
-				[]string{fault.StatusPending, fault.StatusProcessing},
+				fault.OpenStatuses(),
 			)
 		}
 		return statement
@@ -358,7 +358,7 @@ func (s *Service) countFaultsByLamp(ctx context.Context, lampIDs []uint, openOnl
 		Select("lamp_id, COUNT(*) AS total").
 		Where("lamp_id IN ?", lampIDs)
 	if openOnly {
-		statement = statement.Where("status IN ?", []string{fault.StatusPending, fault.StatusProcessing})
+		statement = statement.Where("status IN ?", fault.OpenStatuses())
 	}
 	if err := statement.Group("lamp_id").Scan(&rows).Error; err != nil {
 		return nil, err
@@ -375,7 +375,7 @@ func (s *Service) countFaultsByLamp(ctx context.Context, lampIDs []uint, openOnl
 func (s *Service) currentFaults(ctx context.Context, lampIDs []uint) (map[uint]fault.Fault, error) {
 	entities := make([]fault.Fault, 0)
 	err := s.db.WithContext(ctx).Model(&fault.Fault{}).
-		Where("lamp_id IN ? AND status IN ?", lampIDs, []string{fault.StatusPending, fault.StatusProcessing}).
+		Where("lamp_id IN ? AND status IN ?", lampIDs, fault.OpenStatuses()).
 		Order("reported_at DESC, id DESC").
 		Find(&entities).Error
 	if err != nil {

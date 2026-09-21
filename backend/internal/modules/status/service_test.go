@@ -185,3 +185,62 @@ func TestLampStatusListAndTrack(t *testing.T) {
 	_, err = h.status.Track(ctx, status.TrackQuery{})
 	require.Error(t, err, "缺少查询条件时应返回错误")
 }
+
+// 已修复待闭环的故障仍属未闭环: 路灯保持故障状态, 且维修状态列表与看板统计的口径一致。
+func TestRepairedFaultKeepsLampFaultEverywhere(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+
+	device := h.createLamp(t, "LD-S-201", "学院路")
+	entity := h.createFault(t, device.ID, "灯具常亮")
+
+	record, err := h.repairs.Create(ctx, repair.CreateRequest{FaultID: entity.ID, Repairman: "维修工丙"})
+	require.NoError(t, err)
+	_, err = h.repairs.Finish(ctx, record.ID, repair.FinishRequest{Result: repair.ResultFixed})
+	require.NoError(t, err)
+
+	faultState, err := h.faults.GetByID(ctx, entity.ID)
+	require.NoError(t, err)
+	require.Equal(t, fault.StatusRepaired, faultState.Status)
+
+	// 台账详情: 已修复未闭环, 运行状态仍为故障
+	detail, err := h.lamps.Get(ctx, device.ID)
+	require.NoError(t, err)
+	require.Equal(t, lamp.RunStatusFault, detail.RunStatus, "已修复待闭环时路灯不得回落正常")
+
+	// 维修状态列表: 未闭环筛选能找到该灯, 未闭环计数与当前故障一致
+	rows, total, _, err := h.status.Lamps(ctx, status.LampQuery{OnlyOpen: true})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Len(t, rows, 1)
+	require.Equal(t, device.Code, rows[0].LampCode)
+	require.Equal(t, lamp.RunStatusFault, rows[0].RunStatus)
+	require.Equal(t, int64(1), rows[0].OpenFaults)
+	require.Equal(t, entity.FaultNo, rows[0].FaultNo)
+	require.Equal(t, fault.StatusRepaired, rows[0].FaultStatus)
+
+	// 看板: 未闭环故障数与路灯状态分布口径一致
+	overview, err := h.status.Overview(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), overview.Fault.OpenTotal)
+	require.Equal(t, int64(1), overview.Lamp.ByRunStatus[lamp.RunStatusFault])
+	require.Equal(t, int64(0), overview.Lamp.ByRunStatus[lamp.RunStatusNormal])
+
+	// 故障闭环后: 台账与看板一致恢复
+	_, err = h.faults.Close(ctx, entity.ID, fault.CloseRequest{Remark: "复核通过"})
+	require.NoError(t, err)
+
+	detail, err = h.lamps.Get(ctx, device.ID)
+	require.NoError(t, err)
+	require.Equal(t, lamp.RunStatusNormal, detail.RunStatus, "全部故障闭环后路灯才恢复为正常")
+
+	rows, total, _, err = h.status.Lamps(ctx, status.LampQuery{OnlyOpen: true})
+	require.NoError(t, err)
+	require.Equal(t, int64(0), total)
+	require.Empty(t, rows)
+
+	overview, err = h.status.Overview(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), overview.Fault.OpenTotal)
+	require.Equal(t, int64(1), overview.Lamp.ByRunStatus[lamp.RunStatusNormal])
+}

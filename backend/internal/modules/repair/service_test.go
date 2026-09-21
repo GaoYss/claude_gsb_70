@@ -145,13 +145,17 @@ func TestFaultRepairLifecycle(t *testing.T) {
 
 	lampAfterFinish, err := h.lamps.Get(ctx, device.ID)
 	require.NoError(t, err)
-	require.Equal(t, lamp.RunStatusNormal, lampAfterFinish.RunStatus, "修复后路灯应恢复为正常")
+	require.Equal(t, lamp.RunStatusFault, lampAfterFinish.RunStatus, "已修复未闭环时路灯仍应保持故障状态")
 
 	// 关闭故障形成闭环
 	closed, err := h.faults.Close(ctx, entity.ID, fault.CloseRequest{Remark: "现场复核通过"})
 	require.NoError(t, err)
 	require.Equal(t, fault.StatusClosed, closed.Status)
 	require.NotNil(t, closed.ClosedAt)
+
+	lampAfterClose, err := h.lamps.Get(ctx, device.ID)
+	require.NoError(t, err)
+	require.Equal(t, lamp.RunStatusNormal, lampAfterClose.RunStatus, "故障闭环后路灯才恢复为正常")
 
 	// 已产生的维修记录使故障不可删除
 	requireConflict(t, h.faults.Delete(ctx, entity.ID))
@@ -205,6 +209,43 @@ func TestRepairRejectedOnClosedFault(t *testing.T) {
 
 	_, err = h.repairs.Create(ctx, repair.CreateRequest{FaultID: entity.ID, Repairman: "维修工丁"})
 	requireConflict(t, err)
+}
+
+// 一盏路灯同时挂多条未闭环故障时, 运行状态由所有未闭环故障共同决定:
+// 关掉其中一条不能回落正常, 只有全部闭环后才恢复。
+func TestLampStatusFallsBackOnlyAfterAllFaultsClosed(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	device := h.createLamp(t, "LD-T-005")
+
+	// 第一条故障修复完工(已修复待闭环)
+	first := h.createFault(t, device.ID, "整灯不亮")
+	record, err := h.repairs.Create(ctx, repair.CreateRequest{FaultID: first.ID, Repairman: "维修工甲"})
+	require.NoError(t, err)
+	_, err = h.repairs.Finish(ctx, record.ID, repair.FinishRequest{Result: repair.ResultFixed})
+	require.NoError(t, err)
+
+	// 已修复待闭环不阻碍登记第二条故障, 此时路灯挂有两条未闭环故障
+	second := h.createFault(t, device.ID, "灯杆基础松动")
+	require.Equal(t, fault.StatusPending, second.Status)
+
+	lampState, err := h.lamps.Get(ctx, device.ID)
+	require.NoError(t, err)
+	require.Equal(t, lamp.RunStatusFault, lampState.RunStatus)
+
+	// 关掉第二条, 第一条仍未闭环, 路灯不得回落正常
+	_, err = h.faults.Close(ctx, second.ID, fault.CloseRequest{Remark: "复核通过"})
+	require.NoError(t, err)
+	lampState, err = h.lamps.Get(ctx, device.ID)
+	require.NoError(t, err)
+	require.Equal(t, lamp.RunStatusFault, lampState.RunStatus, "仍有未闭环故障时路灯应保持故障状态")
+
+	// 第一条也闭环后, 路灯才恢复正常
+	_, err = h.faults.Close(ctx, first.ID, fault.CloseRequest{Remark: "复核通过"})
+	require.NoError(t, err)
+	lampState, err = h.lamps.Get(ctx, device.ID)
+	require.NoError(t, err)
+	require.Equal(t, lamp.RunStatusNormal, lampState.RunStatus, "全部故障闭环后路灯才恢复为正常")
 }
 
 func TestFaultValidation(t *testing.T) {

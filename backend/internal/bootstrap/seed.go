@@ -349,13 +349,14 @@ func seedFaultCases() []seedFaultCase {
 }
 
 // syncSeedLampStatus 依据演示故障数据回填路灯运行状态, 保证台账与故障一致。
+// 口径与运行时的状态联动一致: 只要存在未闭环故障(含已修复待闭环)就不回落正常。
 func syncSeedLampStatus(db *gorm.DB, faults []fault.Fault, lamps []lamp.Lamp) error {
 	statuses := map[uint]string{}
 	for _, item := range faults {
 		switch item.Status {
 		case fault.StatusProcessing:
 			statuses[item.LampID] = lamp.RunStatusMaintenance
-		case fault.StatusPending:
+		case fault.StatusPending, fault.StatusRepaired:
 			if statuses[item.LampID] != lamp.RunStatusMaintenance {
 				statuses[item.LampID] = lamp.RunStatusFault
 			}
