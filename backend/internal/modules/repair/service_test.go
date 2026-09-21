@@ -145,13 +145,17 @@ func TestFaultRepairLifecycle(t *testing.T) {
 
 	lampAfterFinish, err := h.lamps.Get(ctx, device.ID)
 	require.NoError(t, err)
-	require.Equal(t, lamp.RunStatusNormal, lampAfterFinish.RunStatus, "修复后路灯应恢复为正常")
+	require.Equal(t, lamp.RunStatusFault, lampAfterFinish.RunStatus, "已修复但未闭环, 路灯应保持故障状态")
 
 	// 关闭故障形成闭环
 	closed, err := h.faults.Close(ctx, entity.ID, fault.CloseRequest{Remark: "现场复核通过"})
 	require.NoError(t, err)
 	require.Equal(t, fault.StatusClosed, closed.Status)
 	require.NotNil(t, closed.ClosedAt)
+
+	lampAfterClose, err := h.lamps.Get(ctx, device.ID)
+	require.NoError(t, err)
+	require.Equal(t, lamp.RunStatusNormal, lampAfterClose.RunStatus, "全部故障闭环后路灯才恢复为正常")
 
 	// 已产生的维修记录使故障不可删除
 	requireConflict(t, h.faults.Delete(ctx, entity.ID))

@@ -304,7 +304,10 @@ func (s *Service) SyncRepairStats(ctx context.Context, faultID uint, repairCount
 	return s.syncLampStatus(ctx, entity.LampID)
 }
 
-// syncLampStatus 依据该路灯的故障分布重新计算并写回运行状态。
+// syncLampStatus 依据该路灯名下全部故障的闭环情况重新计算并写回运行状态。
+// 存在维修中故障 -> 维修中; 存在待处理或已修复故障 -> 故障; 全部闭环(已关闭)才回落正常。
+// 已修复的故障尚未闭环确认, 不能据此把路灯置回正常, 否则同灯多条未闭环故障时
+// 关掉其中一条就会掩盖其余未处理完的故障。
 func (s *Service) syncLampStatus(ctx context.Context, lampID uint) error {
 	counts, err := s.repo.StatusCountsForLamp(ctx, lampID)
 	if err != nil {
@@ -315,7 +318,7 @@ func (s *Service) syncLampStatus(ctx context.Context, lampID uint) error {
 	switch {
 	case counts[StatusProcessing] > 0:
 		status = lamp.RunStatusMaintenance
-	case counts[StatusPending] > 0:
+	case counts[StatusPending] > 0 || counts[StatusRepaired] > 0:
 		status = lamp.RunStatusFault
 	}
 	return s.lamps.UpdateRunStatus(ctx, lampID, status)

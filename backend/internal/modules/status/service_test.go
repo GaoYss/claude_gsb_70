@@ -185,3 +185,56 @@ func TestLampStatusListAndTrack(t *testing.T) {
 	_, err = h.status.Track(ctx, status.TrackQuery{})
 	require.Error(t, err, "缺少查询条件时应返回错误")
 }
+
+// TestLampRunStatusReflectsAllUnclosedFaults 验证路灯运行状态由名下全部未闭环故障共同决定:
+// 两条未闭环故障关掉其中一条后, 台账、维修状态列表与看板都必须保持故障结论, 全部闭环后才回落正常。
+func TestLampRunStatusReflectsAllUnclosedFaults(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+
+	device := h.createLamp(t, "LD-S-201", "滨江路")
+
+	// 第一条故障修复完成但未关闭(已修复仍属未闭环)
+	first := h.createFault(t, device.ID, "灯不亮")
+	record, err := h.repairs.Create(ctx, repair.CreateRequest{FaultID: first.ID, Repairman: "维修工甲"})
+	require.NoError(t, err)
+	_, err = h.repairs.Finish(ctx, record.ID, repair.FinishRequest{Result: repair.ResultFixed})
+	require.NoError(t, err)
+
+	// 已修复不占用在途工单, 允许再登记第二条 -> 两条未闭环故障并存
+	second := h.createFault(t, device.ID, "灯光闪烁")
+
+	// 关掉第二条, 第一条仍未闭环: 三个读模型都必须保持故障结论
+	_, err = h.faults.Close(ctx, second.ID, fault.CloseRequest{Remark: "误报作废"})
+	require.NoError(t, err)
+
+	current, err := h.lamps.Get(ctx, device.ID)
+	require.NoError(t, err)
+	require.Equal(t, lamp.RunStatusFault, current.RunStatus, "仍有未闭环故障时路灯不得恢复为正常")
+
+	rows, total, _, err := h.status.Lamps(ctx, status.LampQuery{Keyword: device.Code})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Equal(t, lamp.RunStatusFault, rows[0].RunStatus, "维修状态列表应与台账结论一致")
+
+	overview, err := h.status.Overview(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), overview.Lamp.ByRunStatus[lamp.RunStatusFault], "看板运行状态分布应与台账结论一致")
+	require.Equal(t, int64(0), overview.Lamp.ByRunStatus[lamp.RunStatusNormal])
+
+	// 全部闭环后, 三个读模型一起回落为正常
+	_, err = h.faults.Close(ctx, first.ID, fault.CloseRequest{Remark: "现场复核通过"})
+	require.NoError(t, err)
+
+	current, err = h.lamps.Get(ctx, device.ID)
+	require.NoError(t, err)
+	require.Equal(t, lamp.RunStatusNormal, current.RunStatus, "全部故障闭环后路灯才恢复为正常")
+
+	rows, _, _, err = h.status.Lamps(ctx, status.LampQuery{Keyword: device.Code})
+	require.NoError(t, err)
+	require.Equal(t, lamp.RunStatusNormal, rows[0].RunStatus)
+
+	overview, err = h.status.Overview(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), overview.Lamp.ByRunStatus[lamp.RunStatusNormal])
+}
